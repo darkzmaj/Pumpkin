@@ -2962,7 +2962,12 @@ impl Entity {
         for (version, recipients) in recipients_by_version {
             let mut buf = Vec::new();
             for m in meta {
-                let _ = m.write(&mut buf, &version);
+                if let Err(err) = m.write(&mut buf, &version) {
+                    tracing::warn!(
+                        "Failed to write metadata for entity {} version {version:?}: {err}",
+                        self.entity_id
+                    );
+                }
             }
             buf.put_u8(255);
             let packet = CSetEntityMetadata::new(self.entity_id.into(), buf.into());

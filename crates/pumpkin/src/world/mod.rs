@@ -970,7 +970,11 @@ impl World {
                     skin_parts,
                 ),
             ] {
-                let _ = meta.write(&mut buf, &version);
+                if let Err(err) = meta.write(&mut buf, &version) {
+                    tracing::warn!(
+                        "Failed to write skin-parts metadata for entity {entity_id} version {version:?}: {err}"
+                    );
+                }
             }
             buf.put_u8(255);
             let packet = CSetEntityMetadata::new(entity_id.into(), buf.into());
@@ -3531,14 +3535,18 @@ impl World {
                     pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMISATION,
                     config.skin_parts,
                 );
-                let _ = meta.write(&mut buf, &client.version.load());
+                if let Err(err) = meta.write(&mut buf, &client.version.load()) {
+                    tracing::warn!("Failed to write PLAYER_MODE_CUSTOMISATION metadata: {err}");
+                }
             };
             {
                 let meta = Metadata::new(
                     pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMIZATION_ID,
                     config.skin_parts,
                 );
-                let _ = meta.write(&mut buf, &client.version.load());
+                if let Err(err) = meta.write(&mut buf, &client.version.load()) {
+                    tracing::warn!("Failed to write PLAYER_MODE_CUSTOMIZATION_ID metadata: {err}");
+                }
             };
             drop(config);
             buf.put_u8(255);

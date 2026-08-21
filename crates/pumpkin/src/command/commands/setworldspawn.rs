@@ -11,10 +11,12 @@ use crate::command::{
     dispatcher::CommandError,
     tree::{CommandTree, builder::argument},
 };
+use crate::net::ClientPlatform;
 use crate::plugin::world::spawn_change::SpawnChangeEvent;
 use crate::server::Server;
 use pumpkin_data::dimension::Dimension;
 use pumpkin_data::translation;
+use pumpkin_util::version::JavaMinecraftVersion;
 use pumpkin_util::{math::position::BlockPos, text::TextComponent};
 
 const NAMES: [&str; 1] = ["setworldspawn"];
@@ -155,8 +157,18 @@ async fn setworldspawn(
 
     server.level_info.store(Arc::new(new_info));
 
-    sender
-        .send_message(TextComponent::translate_cross(
+    // `commands.setworldspawn.success.new` (with pitch and dimension) was only added in 26.1;
+    // clients on 1.21.11 and earlier only know the older `commands.setworldspawn.success`
+    // (position and yaw only), and show the raw key untranslated if we send them the new one.
+    let supports_new_message = sender.as_player().is_none_or(|player| {
+        !matches!(
+            player.client.as_ref(),
+            ClientPlatform::Java(client) if client.version.load() < JavaMinecraftVersion::V_26_1
+        )
+    });
+
+    let message = if supports_new_message {
+        TextComponent::translate_cross(
             translation::java::COMMANDS_SETWORLDSPAWN_SUCCESS_NEW,
             translation::java::COMMANDS_SETWORLDSPAWN_SUCCESS_NEW,
             [
@@ -167,8 +179,21 @@ async fn setworldspawn(
                 TextComponent::text(new_pitch.to_string()),
                 TextComponent::text(world.dimension.minecraft_name),
             ],
-        ))
-        .await;
+        )
+    } else {
+        TextComponent::translate_cross(
+            translation::java::COMMANDS_SETWORLDSPAWN_SUCCESS,
+            translation::java::COMMANDS_SETWORLDSPAWN_SUCCESS,
+            [
+                TextComponent::text(new_position.0.x.to_string()),
+                TextComponent::text(new_position.0.y.to_string()),
+                TextComponent::text(new_position.0.z.to_string()),
+                TextComponent::text(new_yaw.to_string()),
+            ],
+        )
+    };
+
+    sender.send_message(message).await;
 
     Ok(1)
 }

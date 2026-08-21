@@ -107,8 +107,17 @@ impl JavaClient {
 
                 let new_on_ground = packet.collision & FLAG_ON_GROUND != 0;
                 entity.on_ground.store(new_on_ground, Ordering::Relaxed);
-                if new_on_ground && entity.is_fall_flying() {
-                    entity.set_fall_flying(false).await;
+                if entity.is_fall_flying() {
+                    let still_has_elytra = {
+                        let equipment = player.living_entity.entity_equipment.lock().await;
+                        equipment
+                            .equipment
+                            .get(&pumpkin_data::data_component_impl::EquipmentSlot::CHEST)
+                            .is_some_and(|stack| stack.item == &pumpkin_data::item::Item::ELYTRA)
+                    };
+                    if new_on_ground || !still_has_elytra {
+                        entity.set_fall_flying(false).await;
+                    }
                 }
                 let world = &player.world();
 
@@ -245,9 +254,20 @@ impl JavaClient {
                 {
                     player.jump().await;
                 }
-                entity
-                    .on_ground
-                    .store((packet.collision & FLAG_ON_GROUND) != 0, Ordering::Relaxed);
+                let new_on_ground = (packet.collision & FLAG_ON_GROUND) != 0;
+                entity.on_ground.store(new_on_ground, Ordering::Relaxed);
+                if entity.is_fall_flying() {
+                    let still_has_elytra = {
+                        let equipment = player.living_entity.entity_equipment.lock().await;
+                        equipment
+                            .equipment
+                            .get(&pumpkin_data::data_component_impl::EquipmentSlot::CHEST)
+                            .is_some_and(|stack| stack.item == &pumpkin_data::item::Item::ELYTRA)
+                    };
+                    if new_on_ground || !still_has_elytra {
+                        entity.set_fall_flying(false).await;
+                    }
+                }
 
                 entity.set_rotation(wrap_degrees(packet.yaw) % 360.0, wrap_degrees(packet.pitch));
 
