@@ -39,6 +39,10 @@ pub struct ItemEntity {
     never_pickup: AtomicBool,
 }
 
+/// Below this, a settled item's residual friction-decayed velocity is visually indistinguishable
+/// from rest; see `move_and_apply_friction`.
+const REST_EPSILON: f64 = 1.0E-3;
+
 impl ItemEntity {
     pub fn new(entity: Entity, item_stack: ItemStack) -> Self {
         entity.velocity.store(Vector3::new(
@@ -348,7 +352,6 @@ impl ItemEntity {
         // That kept `moved` true and triggered a full sync packet every tick for the item's
         // entire remaining lifetime. Snap negligible velocity to exactly zero once it's visually
         // indistinguishable from rest, matching what the client already renders.
-        const REST_EPSILON: f64 = 1.0E-3;
         if velo.x.abs() < REST_EPSILON {
             velo.x = 0.0;
         }
