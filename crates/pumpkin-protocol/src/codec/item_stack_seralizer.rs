@@ -6,6 +6,7 @@ use pumpkin_data::data_component_impl::{CustomNameImpl, DataComponentImpl, ItemN
 use pumpkin_data::item::Item;
 use pumpkin_data::item_id_remap::{remap_item_id_for_version, remap_item_id_from_version};
 use pumpkin_data::item_stack::ItemStack;
+use pumpkin_data::packet::CURRENT_MC_VERSION;
 use pumpkin_nbt::tag::NbtTag;
 use pumpkin_util::text::TextComponent;
 use pumpkin_util::version::JavaMinecraftVersion;
@@ -30,11 +31,24 @@ fn item_component_counts(stack: &ItemStack) -> (u8, u8) {
     (to_add, to_remove)
 }
 
+/// The wire id for a data component under the connecting client's protocol version. See
+/// `read_component_id`'s comment - the `minecraft:data_component_type` registry isn't stable
+/// across versions, so a component sent to a pre-26.1 client must use its legacy id, not the
+/// current (26.1+) one `DataComponent::to_id` returns.
+fn component_wire_id(id: DataComponent, version: JavaMinecraftVersion) -> u8 {
+    if version < JavaMinecraftVersion::V_26_1 {
+        id.to_id_legacy().unwrap_or_else(|| id.to_id())
+    } else {
+        id.to_id()
+    }
+}
+
 fn serialize_any_item_stack_with_id(
     stack: &ItemStack,
     item_id: u16,
     is_template: bool,
     write: &mut impl NetworkWriteExt,
+    version: JavaMinecraftVersion,
 ) -> Result<(), WritingError> {
     if stack.is_empty() {
         write.put_var_int(&VarInt(0))
@@ -52,14 +66,14 @@ fn serialize_any_item_stack_with_id(
 
         for (id, data) in &stack.patch {
             if let Some(data) = data {
-                write.put_var_int(&VarInt::from(id.to_id()))?;
+                write.put_var_int(&VarInt::from(component_wire_id(*id, version)))?;
                 serialize(*id, data.as_ref(), write)?;
             }
         }
 
         for (id, data) in &stack.patch {
             if data.is_none() {
-                write.put_var_int(&VarInt::from(id.to_id()))?;
+                write.put_var_int(&VarInt::from(component_wire_id(*id, version)))?;
             }
         }
 
@@ -71,14 +85,16 @@ fn serialize_item_stack_with_id(
     stack: &ItemStack,
     item_id: u16,
     write: &mut impl NetworkWriteExt,
+    version: JavaMinecraftVersion,
 ) -> Result<(), WritingError> {
-    serialize_any_item_stack_with_id(stack, item_id, false, write)
+    serialize_any_item_stack_with_id(stack, item_id, false, write, version)
 }
 
 fn serialize_length_prefixed_item_stack_with_id(
     stack: &ItemStack,
     item_id: u16,
     write: &mut impl NetworkWriteExt,
+    version: JavaMinecraftVersion,
 ) -> Result<(), WritingError> {
     if stack.is_empty() {
         write.put_var_int(&VarInt(0))
@@ -91,7 +107,7 @@ fn serialize_length_prefixed_item_stack_with_id(
 
         for (id, data) in &stack.patch {
             if let Some(data) = data {
-                write.put_var_int(&VarInt::from(id.to_id()))?;
+                write.put_var_int(&VarInt::from(component_wire_id(*id, version)))?;
                 let mut comp_buf = Vec::new();
                 serialize(*id, data.as_ref(), &mut comp_buf)?;
                 write.put_var_int(&VarInt::from(comp_buf.len() as i32))?;
@@ -101,7 +117,7 @@ fn serialize_length_prefixed_item_stack_with_id(
 
         for (id, data) in &stack.patch {
             if data.is_none() {
-                write.put_var_int(&VarInt::from(id.to_id()))?;
+                write.put_var_int(&VarInt::from(component_wire_id(*id, version)))?;
             }
         }
 
@@ -113,6 +129,7 @@ fn serialize_item_cost_with_id(
     stack: &ItemStack,
     item_id: u16,
     write: &mut impl NetworkWriteExt,
+    version: JavaMinecraftVersion,
 ) -> Result<(), WritingError> {
     let component_count = stack
         .patch
@@ -127,7 +144,7 @@ fn serialize_item_cost_with_id(
     write.put_var_int(&VarInt(component_count))?;
     for (id, data) in &stack.patch {
         if let Some(data) = data {
-            write.put_var_int(&VarInt::from(id.to_id()))?;
+            write.put_var_int(&VarInt::from(component_wire_id(*id, version)))?;
             serialize(*id, data.as_ref(), write)?;
         }
     }
@@ -293,7 +310,11 @@ impl ItemStackSerializer<'_> {
     }
 
     pub fn write(&self, write: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
-        serialize_item_stack_with_id(self.0.as_ref(), self.0.item.id, write)
+        // No client version is available here (this is the unversioned path used by entity
+        // metadata and other callers without a specific recipient in scope); fall back to the
+        // current wire ids, matching this function's behavior before per-version resolution
+        // existed. See `write_with_version` for the version-aware path.
+        serialize_item_stack_with_id(self.0.as_ref(), self.0.item.id, write, CURRENT_MC_VERSION)
     }
 
     pub fn read_length_prefixed_optional(
@@ -360,7 +381,7 @@ impl ItemStackSerializer<'_> {
         version: &JavaMinecraftVersion,
     ) -> Result<(), WritingError> {
         let remapped_item_id = remap_item_id_for_version(self.0.item.id, *version);
-        serialize_item_stack_with_id(self.0.as_ref(), remapped_item_id, write)
+        serialize_item_stack_with_id(self.0.as_ref(), remapped_item_id, write, *version)
     }
 
     pub fn write_length_prefixed_with_version(
@@ -369,7 +390,12 @@ impl ItemStackSerializer<'_> {
         version: &JavaMinecraftVersion,
     ) -> Result<(), WritingError> {
         let remapped_item_id = remap_item_id_for_version(self.0.item.id, *version);
-        serialize_length_prefixed_item_stack_with_id(self.0.as_ref(), remapped_item_id, write)
+        serialize_length_prefixed_item_stack_with_id(
+            self.0.as_ref(),
+            remapped_item_id,
+            write,
+            *version,
+        )
     }
 
     pub fn write_item_cost_with_version(
@@ -378,7 +404,7 @@ impl ItemStackSerializer<'_> {
         version: &JavaMinecraftVersion,
     ) -> Result<(), WritingError> {
         let remapped_item_id = remap_item_id_for_version(self.0.item.id, *version);
-        serialize_item_cost_with_id(self.0.as_ref(), remapped_item_id, write)
+        serialize_item_cost_with_id(self.0.as_ref(), remapped_item_id, write, *version)
     }
 
     #[must_use]
@@ -566,11 +592,18 @@ impl ItemStackTemplateSerializer<'_> {
             remapped_item_id,
             *version >= JavaMinecraftVersion::V_26_1,
             write,
+            *version,
         )
     }
 
     pub fn write(&self, write: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
-        serialize_any_item_stack_with_id(self.0.as_ref(), self.0.item.id, true, write)
+        serialize_any_item_stack_with_id(
+            self.0.as_ref(),
+            self.0.item.id,
+            true,
+            write,
+            CURRENT_MC_VERSION,
+        )
     }
 }
 
@@ -613,5 +646,36 @@ mod tests {
             .expect("component id 67 resolved to Fireworks, not LodestoneTracker");
         assert_eq!(fireworks.flight_duration, 3);
         assert!(fireworks.explosions.is_empty());
+    }
+
+    // Regression test for the write-direction counterpart of the bug above: sending a saved
+    // inventory (e.g. via Set Container Content on join) back to a pre-26.1 client must also use
+    // the legacy component id, or the client's own decoder rejects the packet outright
+    // ("Failed to decode packet 'clientbound/minecraft:container_set_content'").
+    #[test]
+    fn legacy_client_receives_legacy_fireworks_component_id() {
+        let fireworks = FireworksImpl::new(3, Vec::new());
+        let mut stack = ItemStack::new(64, &Item::FIREWORK_ROCKET);
+        stack
+            .patch
+            .push((DataComponent::Fireworks, Some(fireworks.to_dyn())));
+        let serializer = ItemStackSerializer::from(stack);
+
+        let mut bytes = Vec::new();
+        serializer
+            .write_with_version(&mut bytes, &JavaMinecraftVersion::V_1_21_11)
+            .expect("serialize for a legacy client");
+
+        // Skip item_count, item_id, num_to_add, num_to_remove; the next byte is the component id.
+        let mut cursor = std::io::Cursor::new(bytes.as_slice());
+        cursor.get_var_int().unwrap();
+        cursor.get_var_int().unwrap();
+        cursor.get_var_int().unwrap();
+        cursor.get_var_int().unwrap();
+        let component_id = bytes[cursor.position() as usize];
+        assert_eq!(
+            component_id, 67,
+            "fireworks must be written as legacy id 67 for a 1.21.11 client, not the current id 69"
+        );
     }
 }
