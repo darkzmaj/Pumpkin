@@ -107,7 +107,8 @@ impl JavaClient {
 
                 let new_on_ground = packet.collision & FLAG_ON_GROUND != 0;
                 entity.on_ground.store(new_on_ground, Ordering::Relaxed);
-                if entity.is_fall_flying() {
+                let was_fall_flying = entity.is_fall_flying();
+                if was_fall_flying {
                     let still_has_elytra = {
                         let equipment = player.living_entity.entity_equipment.lock().await;
                         equipment
@@ -161,7 +162,7 @@ impl JavaClient {
                             player.clone(),
                             height_difference,
                             packet.collision & FLAG_ON_GROUND != 0,
-                            player.gamemode.load() == GameMode::Creative,
+                            player.gamemode.load() == GameMode::Creative || was_fall_flying,
                         )
                         .await;
                 }
@@ -256,7 +257,8 @@ impl JavaClient {
                 }
                 let new_on_ground = (packet.collision & FLAG_ON_GROUND) != 0;
                 entity.on_ground.store(new_on_ground, Ordering::Relaxed);
-                if entity.is_fall_flying() {
+                let was_fall_flying = entity.is_fall_flying();
+                if was_fall_flying {
                     let still_has_elytra = {
                         let equipment = player.living_entity.entity_equipment.lock().await;
                         equipment
@@ -328,7 +330,7 @@ impl JavaClient {
                             player.clone(),
                             height_difference,
                             (packet.collision & FLAG_ON_GROUND) != 0,
-                            player.gamemode.load() == GameMode::Creative,
+                            player.gamemode.load() == GameMode::Creative || was_fall_flying,
                         )
                         .await;
                 }
